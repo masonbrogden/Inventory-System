@@ -1,0 +1,30 @@
+server:
+  # Order Service listens here; Inventory Service uses 8081 so both can run at once.
+  port: 8080
+
+spring:
+  application:
+    name: order-service
+
+  # Points at the `order-db` container from docker-compose.yml (host port 5432).
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orderdb
+    username: orderuser
+    password: orderpass
+
+  jpa:
+    hibernate:
+      # Hibernate creates/updates tables from our @Entity classes on startup.
+      # No entities exist yet, so this currently does nothing.
+      ddl-auto: update
+    # Log the SQL Hibernate generates. Handy while learning; noisy in production.
+    show-sql: true
+
+  kafka:
+    # The broker from docker-compose.yml, reachable on the host at localhost:9092.
+    bootstrap-servers: localhost:9092
+    consumer:
+      # Identifies this service as a consumer group so Kafka tracks its read position.
+      group-id: order-service
+      # On first run (no saved position), read the topic from the beginning.
+      auto-offset-reset: earliest
