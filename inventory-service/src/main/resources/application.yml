@@ -15,7 +15,7 @@ spring:
   jpa:
     hibernate:
       # Hibernate creates/updates tables from our @Entity classes on startup.
-      # No entities exist yet, so this currently does nothing.
+      # This is what creates the `stock_items` table from the StockItem entity.
       ddl-auto: update
     # Log the SQL Hibernate generates. Handy while learning; noisy in production.
     show-sql: true
@@ -23,8 +23,22 @@ spring:
   kafka:
     # The broker from docker-compose.yml, reachable on the host at localhost:9092.
     bootstrap-servers: localhost:9092
+    producer:
+      # Used for the InventoryReserved / InventoryFailed events we publish.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
       # Identifies this service as a consumer group so Kafka tracks its read position.
       group-id: inventory-service
       # On first run (no saved position), read the topic from the beginning.
       auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Turns the incoming JSON bytes back into a Java object.
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        # Order Service stamps every message with a __TypeId__ header naming
+        # com.inventorysystem.order.OrderCreated - a class that does not exist
+        # in this service. Ignore the header entirely...
+        spring.json.use.type.headers: false
+        # ...and always deserialize into our own copy of the event instead.
+        spring.json.value.default.type: com.inventorysystem.inventory.OrderCreated

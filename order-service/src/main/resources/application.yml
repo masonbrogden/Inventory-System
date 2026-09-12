@@ -15,7 +15,7 @@ spring:
   jpa:
     hibernate:
       # Hibernate creates/updates tables from our @Entity classes on startup.
-      # No entities exist yet, so this currently does nothing.
+      # This is what creates the `orders` table from the Order entity.
       ddl-auto: update
     # Log the SQL Hibernate generates. Handy while learning; noisy in production.
     show-sql: true
@@ -23,8 +23,24 @@ spring:
   kafka:
     # The broker from docker-compose.yml, reachable on the host at localhost:9092.
     bootstrap-servers: localhost:9092
+    producer:
+      # Kafka moves raw bytes, so every message needs a key and a value
+      # serializer. We send no key, so the key serializer is never exercised.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Turns the OrderCreated record into JSON bytes using Jackson.
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
       # Identifies this service as a consumer group so Kafka tracks its read position.
       group-id: order-service
       # On first run (no saved position), read the topic from the beginning.
       auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        # inventory-events carries two different event types, and Inventory
+        # Service labels each message with its own class name in the __TypeId__
+        # header. Those classes do not exist here, so translate each remote name
+        # onto our local copy. This is what lets @KafkaHandler pick a method.
+        spring.json.type.mapping: com.inventorysystem.inventory.InventoryReserved:com.inventorysystem.order.InventoryReserved,com.inventorysystem.inventory.InventoryFailed:com.inventorysystem.order.InventoryFailed
+        # Only ever build objects from our own package.
+        spring.json.trusted.packages: com.inventorysystem.order

@@ -9,20 +9,34 @@ writes the other's tables.
 ```
                     ┌──────────────────┐
      HTTP :8080 ──▶ │  Order Service   │ ──▶ orderdb      (Postgres :5432)
-                    └────────┬─────────┘
-                             │
-                          Kafka :9092
-                             │
-                    ┌────────▼─────────┐
-     HTTP :8081 ──▶ │ Inventory Service│ ──▶ inventorydb  (Postgres :5433)
+                    └──┬────────────▲──┘
+                       │            │
+          order-events │            │ inventory-events
+                    ┌──▼────────────┴──┐
+                    │ Inventory Service│ ──▶ inventorydb  (Postgres :5433)
                     └──────────────────┘
+                          Kafka :9092
 ```
 
 ## Status
 
-Task 1 complete and verified end to end: both services build, boot, and connect
-to their own database; the Kafka broker is reachable from the host.
-**No business logic, entities, endpoints, or Kafka topics yet.**
+**Task 1** — scaffolding, Docker infrastructure, service config. Verified: both
+services build, boot, and connect to their own database; the Kafka broker is
+reachable from the host.
+
+**Task 2** — Order Service now has an `Order` entity, an `OrderRepository`, and a
+`POST /orders` endpoint.
+
+**Task 3** — `POST /orders` publishes an `OrderCreated` event to the
+`order-events` topic as JSON.
+
+**Task 4** — Inventory Service has a `StockItem` entity seeded with 3 items, and
+a Kafka consumer on `order-events`. It reserves stock when available and
+publishes `InventoryReserved` or `InventoryFailed` to `inventory-events`.
+
+**Task 5** — Order Service consumes `inventory-events` and moves the order to
+`CONFIRMED` or `CANCELLED`. **The loop is closed**: a POST now settles on a
+final status with no direct call between the services.
 
 Verified running versions: Java 21.0.12.1, Spring Boot 3.5.16, Hibernate 6.6.53,
 Tomcat 10.1.55, PostgreSQL 16.15, Kafka 3.9.2.
@@ -81,12 +95,134 @@ cd inventory-service && ./mvnw spring-boot:run
 ```
 
 Order Service comes up on <http://localhost:8080>, Inventory Service on
-<http://localhost:8081>. Neither exposes any endpoints yet — a successful start
-means "Started …Application in N seconds" with no stack trace.
+<http://localhost:8081>. A successful start means "Started …Application in N
+seconds" with no stack trace. See [API](#api) for what you can call.
 
 **Stopping:** `Ctrl+C` in each service terminal, then `docker compose down` at
 the repo root. Add `-v` to `docker compose down` to also wipe the database
 volumes and start clean next time.
+
+## API
+
+### Order Service
+
+`POST /orders` — create an order. Status is always set to `PENDING` by the
+server; any `id` or `status` in the request body is ignored.
+
+```bash
+curl -i -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"item":"widget","quantity":5}'
+```
+
+```
+HTTP/1.1 201
+{"id":1,"item":"widget","quantity":5,"status":"PENDING"}
+```
+
+Order Service owns one table, `orders` (named that way because `order` is a
+reserved SQL word). Hibernate creates it at startup from the `Order` entity.
+
+Each successful `POST /orders` also publishes an event (see [Events](#events)).
+
+### Inventory Service
+
+No endpoints yet.
+
+## Events
+
+| Topic | Produced by | Consumed by |
+|---|---|---|
+| `order-events` | Order Service | Inventory Service |
+| `inventory-events` | Inventory Service | Order Service |
+
+All events are JSON. Topics are created automatically on first publish, with the
+broker default of one partition.
+
+**`OrderCreated`** — published on every successful `POST /orders`:
+
+```json
+{"orderId":3,"item":"widget","quantity":5}
+```
+
+**`InventoryReserved`** — stock was available and has been decremented. Moves
+the order to `CONFIRMED`.
+**`InventoryFailed`** — the item is not stocked, or there is not enough of it.
+Moves the order to `CANCELLED`.
+Both carry the same shape:
+
+```json
+{"orderId":6,"item":"gadget","quantity":2}
+```
+
+Both land on the same topic, so Order Service distinguishes them via the
+`__TypeId__` header, translated onto its own classes by
+`spring.json.type.mapping`.
+
+### Watching a topic
+
+```bash
+docker exec -it kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic inventory-events \
+  --from-beginning
+```
+
+Leave it running and POST an order in another terminal to watch events arrive.
+Swap the topic name for `order-events` to watch the other side. `Ctrl+C` to stop.
+Add `--property print.headers=true` to also see the `__TypeId__` header that
+`JsonSerializer` attaches.
+
+### Seeded stock
+
+Inventory Service seeds `stock_items` on first startup (only when the table is
+empty):
+
+| item | quantity_available |
+|---|---|
+| `widget` | 10 |
+| `gadget` | 5 |
+| `gizmo` | 2 |
+
+Check current levels at any time:
+
+```bash
+docker exec inventory-db psql -U inventoryuser -d inventorydb \
+  -c "select item, quantity_available from stock_items order by id;"
+```
+
+## End-to-end flow
+
+```
+POST /orders                     order row inserted as PENDING
+      │
+      ├─ OrderCreated ──▶ order-events
+                               │
+                               ▼
+                     Inventory Service checks stock_items
+                               │
+              ┌────────────────┴────────────────┐
+        enough stock                      not enough
+              │                                 │
+      decrement, publish                 publish
+      InventoryReserved                  InventoryFailed
+              │                                 │
+              └────────────▶ inventory-events ◀─┘
+                               │
+                               ▼
+                     Order Service updates the order
+                        CONFIRMED  or  CANCELLED
+```
+
+Watch a single order settle:
+
+```bash
+curl -s -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" -d '{"item":"widget","quantity":2}'
+
+docker exec order-db psql -U orderuser -d orderdb \
+  -c "select id, item, quantity, status from orders order by id desc limit 5;"
+```
 
 ## Connection details
 
