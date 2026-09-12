@@ -38,6 +38,10 @@ publishes `InventoryReserved` or `InventoryFailed` to `inventory-events`.
 `CONFIRMED` or `CANCELLED`. **The loop is closed**: a POST now settles on a
 final status with no direct call between the services.
 
+**Task 6** — Inventory Service's consumer is idempotent. It records each handled
+order id in a `processed_events` table and skips anything it has seen before, so
+a redelivered event cannot decrement stock twice.
+
 Verified running versions: Java 21.0.12.1, Spring Boot 3.5.16, Hibernate 6.6.53,
 Tomcat 10.1.55, PostgreSQL 16.15, Kafka 3.9.2.
 
@@ -223,6 +227,39 @@ curl -s -X POST http://localhost:8080/orders \
 docker exec order-db psql -U orderuser -d orderdb \
   -c "select id, item, quantity, status from orders order by id desc limit 5;"
 ```
+
+## Idempotency
+
+Kafka guarantees *at-least-once* delivery, so a consumer must expect the same
+message more than once. Inventory Service keeps a `processed_events` table whose
+primary key is the order id:
+
+```
+    Column    |            Type             | Nullable
+--------------+-----------------------------+----------
+ order_id     | bigint                      | not null
+ processed_at | timestamp(6) with time zone |
+Indexes:
+    "processed_events_pkey" PRIMARY KEY, btree (order_id)
+```
+
+`OrderEventListener` checks that table first and returns early on a hit. The
+check, the stock decrement and the insert all run inside one `@Transactional`
+method, so they commit together or not at all.
+
+Prove it by republishing an event the consumer has already handled:
+
+```bash
+echo '{"orderId":11,"item":"gadget","quantity":1}' | \
+  docker exec -i kafka /opt/kafka/bin/kafka-console-producer.sh \
+    --bootstrap-server localhost:9092 --topic order-events
+
+docker exec inventory-db psql -U inventoryuser -d inventorydb \
+  -c "select item, quantity_available from stock_items order by id;"
+```
+
+Stock stays put, and the log shows
+`Order 11 already processed - ignoring duplicate delivery`.
 
 ## Connection details
 
