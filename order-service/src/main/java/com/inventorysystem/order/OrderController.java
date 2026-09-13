@@ -1,5 +1,6 @@
 package com.inventorysystem.order;
 
+import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.http.HttpStatus;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,6 +27,7 @@ public class OrderController {
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
+	@Operation(summary = "Place an order: saves it as PENDING and publishes an OrderCreated event so Inventory Service can reserve the stock.")
 	public Order create(@RequestBody Order order) {
 		// Ignore any id sent by the client so this always inserts a new row
 		// rather than updating an existing one.
