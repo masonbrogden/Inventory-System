@@ -107,6 +107,7 @@ everything after that happens on background threads.
 | Build tool | Maven | Via the bundled `./mvnw` wrapper — no local Maven install needed |
 | Kafka | 3.9.2 | KRaft mode, single broker, no ZooKeeper |
 | PostgreSQL | 16 | One instance per service |
+| springdoc-openapi | 2.9.1 | Swagger UI for Order Service. 2.x is the Spring Boot 3 line; 3.x needs Boot 4 |
 
 Verified running versions: Java 21.0.12.1, Spring Boot 3.5.16, Hibernate 6.6.53,
 Tomcat 10.1.55, PostgreSQL 16.15, Kafka 3.9.2.
@@ -197,6 +198,9 @@ curl -i -X POST http://localhost:8080/orders \
   -d '{"item":"widget","quantity":2}'
 ```
 
+Or use the [Swagger UI](#swagger-ui): open http://localhost:8080/swagger-ui.html,
+expand `POST /orders`, and click **Try it out**.
+
 **6. Watch it settle:**
 
 ```bash
@@ -240,6 +244,40 @@ The table is named `orders`, not `order`, because `order` is a reserved SQL word
 ### Inventory Service
 
 No HTTP endpoints. It is driven entirely by Kafka events.
+
+### Swagger UI
+
+Order Service documents its own API with springdoc-openapi. With the service
+running, open:
+
+**http://localhost:8080/swagger-ui.html**
+
+It redirects to `/swagger-ui/index.html`, which lists `POST /orders` alongside
+the `Order` schema. **Try it out** sends a real request — it saves an order and
+publishes `OrderCreated` exactly like the `curl` above. The raw OpenAPI spec the
+page is built from is at http://localhost:8080/v3/api-docs, ready to import into
+Postman or feed to a client generator.
+
+Most of the page is generated, not written:
+
+| What the page shows | Where it comes from |
+|---|---|
+| `POST /orders` | `@RequestMapping` + `@PostMapping` — generated |
+| A required `Order` request body | `@RequestBody` — generated |
+| A `201` response returning `Order` | `@ResponseStatus(HttpStatus.CREATED)` and the return type — generated |
+| Field names, types, and the three `status` values | Jackson's view of `Order`, and the `OrderStatus` enum — generated |
+| The endpoint's one-line summary | `@Operation(summary = …)` on `OrderController.create()` |
+| The model and field descriptions | `@Schema(description = …)` in `Order` |
+| `id` and `status` left out of the example request | `@Schema(accessMode = Schema.AccessMode.READ_ONLY)` in `Order` |
+
+springdoc reads the *structure* straight from the Spring MVC code, so that part
+cannot drift out of date. The annotations add only the *meaning* the code cannot
+express, and none of them change behaviour — Jackson ignores them, and the
+controller still overwrites `id` and `status` whatever the docs say.
+
+Inventory Service has no Swagger UI because it has no HTTP endpoints. The Kafka
+side is not in the spec either — springdoc only sees HTTP — so the events are
+documented under [Events](#events).
 
 ## Events
 
